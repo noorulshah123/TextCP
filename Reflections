@@ -1,0 +1,41 @@
+Over this cycle I acted with integrity and client-centricity, applying ServiceNow CRQ/INC rigor and GenAI data-safety rules while delivering secure automation on AWS (ECS/SageMaker/Bedrock). I led with excellence and humility—seeking feedback via PRs, documenting decisions, and completing mandatory trainings—resulting in ⟨SLA%⟩ incident compliance and recognized outcomes (client note, ACE award). I partnered across platform, security, and networking to land repeatable GitLab→Terraform Cloud workflows, shared knowledge through brown-bags/runbooks, and kept an inclusive environment where diverse ideas shaped better solutions. I challenged the status quo by piloting ShinyProxy pre-init seats and header auth to reduce cold-starts, and I supported teammates during incidents while enabling them with reusable modules and templates.
+
+
+---
+
+B) Detailed bullets mapped to Leadership Essentials
+
+Behavior
+
+Always do the right thing: Followed ServiceNow governance (INC/CRQ), enforced least-privilege IAM and GenAI data-safety; no policy exceptions.
+
+Lead with excellence, confidence & humility: Proactively requested code/design reviews; documented trade-offs and runbooks; completed all mandatory trainings.
+
+Exemplify client-centricity: Translated client pain points into CI/CD + IaC improvements; achieved ⟨SLA%⟩ incident compliance and reduced change lead time by ⟨x%⟩.
+
+Act as a true partner: Presented clear risk/cost/time options; aligned change windows; closed the loop with post-implementation notes and RCA actions.
+
+Courage to change: Retired brittle scripts; introduced standard GitLab→Terraform Cloud pipelines and ShinyProxy pre-init/header-auth patterns.
+
+Actively innovate: Tested and adopted pre-warmed seats to cut cold-start by ⟨x%⟩; added pipeline quality gates/drift checks; shared learnings in team forums.
+
+Care deeply / Inclusion: Created space for junior voices in design sessions; rotated demo ownership; ensured docs are accessible and searchable.
+
+
+Collaboration
+
+Cross-team coordination: Worked with Networking/Security/Observability to land ECS networking, logging, and guardrails; kept Jira status and ServiceNow records current.
+
+Knowledge sharing: Ran brown-bags, published “golden path” Terraform modules and GitLab templates; paired during critical deploys to de-risk changes.
+
+Reliable handoffs: Provided change plans, rollback steps, and on-call notes; improved MTTR to ⟨value⟩ through clearer runbooks and alerts.
+
+Mentoring & enablement: Unblocked colleagues on pipelines/IaC; reviewed PRs with actionable feedback; encouraged inclusive participation and idea diversity.
+
+
+
+---
+
+Optional “evidence” line (add at the end)
+
+Evidence: Client appreciation mail dated ⟨dd-mm-yyyy⟩; ACE award ⟨quarter/year⟩; ⟨SLA%⟩ incident SLA; ⟨x⟩ successful CRQs; cold-start reduced by ⟨x%⟩.
