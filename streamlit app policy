@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    { "Sid": "ListBasics",
+      "Effect": "Allow",
+      "Action": ["logs:DescribeLogGroups","logs:DescribeLogStreams"],
+      "Resource": "*"
+    },
+    { "Sid": "ReadTeamClusterGroups",
+      "Effect": "Allow",
+      "Action": ["logs:GetLogEvents","logs:FilterLogEvents","logs:StartQuery","logs:GetQueryResults","logs:StopQuery"],
+      "Resource": "*",
+      "Condition": {
+        "ForAllValues:StringLike": {
+          "logs:LogGroupName": ["/ecs/globaltech/dev/apps-globaltech-dev/*"]
+        }
+      }
+    }
+  ]
+}
