@@ -1,0 +1,14 @@
+# apps.yml (or application.yml 'specs' block)
+- id: logs-viewer
+  display-name: Logs Viewer
+  description: View application logs from CloudWatch (team/cluster scoped)
+  container-image: <your-repo>/logs-viewer:latest
+  container-env:
+    TEAM_NAME:        globaltech
+    ENV:              dev
+    CLUSTER_NAME:     apps-globaltech-dev
+    AWS_REGION:       ap-southeast-2
+    # Optional: comma-separated app ids to shortlist in the UI
+    APP_IDS:          pyshiny-demo,streamlit-app,rshiny-demo
+    # Optional: S3 URL to your apps.yml if you want to read live (needs s3:GetObject)
+    APPS_YML_S3:      s3://sp-config/apps.yml
