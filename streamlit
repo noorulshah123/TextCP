@@ -1,0 +1,99 @@
+# app.py
+import os, time, json
+import streamlit as st
+import boto3
+
+TEAM   = os.getenv("TEAM_NAME", "team")
+ENV    = os.getenv("ENV", "dev")
+CLSTR  = os.getenv("CLUSTER_NAME", "cluster")
+REGION = os.getenv("AWS_REGION", "ap-southeast-2")
+
+def lg(app_id: str) -> str:
+    return f"/ecs/{TEAM}/{ENV}/{CLSTR}/sp-{app_id}"
+
+def logs_client():
+    return boto3.client("logs", region_name=REGION)
+
+def tail_events(group, minutes=5, pattern=None, limit=1000):
+    """FilterLogEvents for last N minutes."""
+    client = logs_client()
+    end   = int(time.time()) * 1000
+    start = end - minutes * 60 * 1000
+    kwargs = {
+        "logGroupName": group,
+        "startTime": start,
+        "endTime": end,
+        "limit": min(limit, 10000),
+        "interleaved": True
+    }
+    if pattern:
+        kwargs["filterPattern"] = pattern
+    next_token = None
+    events = []
+    while True:
+        if next_token: kwargs["nextToken"] = next_token
+        resp = client.filter_log_events(**kwargs)
+        events.extend(resp.get("events", []))
+        next_token = resp.get("nextToken")
+        if not next_token or len(events) >= limit: break
+    return events
+
+def insights_query(group, query, minutes=30, wait_s=5, timeout_s=30):
+    """StartQuery + poll GetQueryResults (single group)."""
+    client = logs_client()
+    end   = int(time.time())
+    start = end - minutes * 60
+    qid = client.start_query(
+        logGroupName=group, startTime=start, endTime=end, queryString=query
+    )["queryId"]
+
+    waited = 0
+    while True:
+        resp = client.get_query_results(queryId=qid)
+        status = resp.get("status")
+        if status in ("Complete","Failed","Cancelled"): return resp
+        time.sleep(wait_s); waited += wait_s
+        if waited >= timeout_s: return {"status":"Timeout","results":[]}
+
+st.title("CloudWatch Application Logs (team/cluster scoped)")
+
+# App selection
+default_ids = [s.strip() for s in os.getenv("APP_IDS","").split(",") if s.strip()]
+app_id = st.selectbox("Application", options=default_ids or ["streamlit-app","pyshiny-demo","rshiny-demo"])
+
+# Mode
+mode = st.radio("Mode", ["Tail (FilterLogEvents)", "Insights query"], horizontal=True)
+
+# Common inputs
+minutes = st.slider("Time window (minutes)", min_value=1, max_value=240, value=15, step=1)
+pattern = st.text_input("Filter pattern (optional)", value='')
+
+st.caption(f"Group: `{lg(app_id)}` | Region: `{REGION}`")
+
+if mode.startswith("Tail"):
+    if st.button("Fetch events"):
+        evts = tail_events(lg(app_id), minutes=minutes, pattern=pattern or None, limit=1000)
+        if not evts:
+            st.info("No events found.")
+        else:
+            for e in evts:
+                ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["timestamp"]/1000))
+                st.text(f"[{ts}] {e.get('message','').rstrip()}")
+
+else:
+    q = st.text_area("Logs Insights query", height=140, value=(
+        'fields @timestamp, @message\n'
+        f'| filter ispresent(@message)\n'
+        f'| sort @timestamp desc\n'
+        f'| limit 100\n'
+    ))
+    if st.button("Run Insights"):
+        resp = insights_query(lg(app_id), q, minutes=minutes, wait_s=2, timeout_s=40)
+        st.write(f"Status: {resp.get('status')}")
+        rows = []
+        for r in resp.get("results", []):
+            rows.append({kv["field"]: kv.get("value","") for kv in r})
+        if rows:
+            st.dataframe(rows, use_container_width=True)
+        else:
+            st.info("No results.")
