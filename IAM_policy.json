@@ -1,0 +1,37 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+
+    /* 1) Let the console list groups and basic metadata */
+    {
+      "Sid": "CWLogsListBasics",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:ListLogDeliveries",
+        "logs:ListTagsForResource"   /* console often calls this */
+      ],
+      "Resource": "*"
+    },
+
+    /* 2) Allow reading ONLY your team’s groups & streams (prefix-structured names) */
+    {
+      "Sid": "CWLogsReadTeamPrefix",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": [
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_NUMBER}:log-group:/ecs/${ENV_NAME}/${TEAM_NAME}/${CLUSTER_NAME}/*",
+        "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_NUMBER}:log-group:/ecs/${ENV_NAME}/${TEAM_NAME}/${CLUSTER_NAME}/*:log-stream:*"
+      ]
+    }
+
+    /* (Optional) if you want users to create Insights queries or saved queries, add the corresponding actions */
+  ]
+}
