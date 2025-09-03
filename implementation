@@ -1,0 +1,6 @@
+Highlights (Aug 2025 — Development only)
+• ShinyProxy pre-initialisation + seat-locking: Implemented pre-warm for selected data-science apps with a startup script that sets defaults and injects dynamic params. Users are routed to warmed seats, so they skip the ECS scale-up wait path and see near-instant launches. (Add: p50/p95 before→after, #apps, minSeats/TTL).
+• Modern R/Shiny base image (Ubuntu 24 + s6): Rebuilt from Ubuntu 24 to cut CVEs and give us first-party control (no dependency on rocker/shiny). This accelerates image patching and reduces supply-chain risk. Note: graceful ECS shutdown improvements weren’t in scope this month; the new base positions us to add that next. (Add: CVE scan deltas, tag/version.)
+• Life-of-Asset (R/Shiny) on ECS — secrets standardised: Updated abc-sagemaker-python to fetch R/Shiny secrets consistently; coordinated ME-CoE domain secrets update and completed test deployment on ECS. This creates a reusable, compliant pattern for future R/Shiny onboardings. (Add: MR/commit IDs, service/task ARNs.)
+Impact: Faster first-open experience (no “cold start” wait), lower vulnerability footprint with quicker patch cycles, and a repeatable deployment path for R/Shiny apps across domains.
+Artifacts I can share: before/after launch metrics, ECR scan report, and the library change set.
