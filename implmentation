@@ -1,0 +1,4 @@
+• Implemented ShinyProxy pre-initialisation with a dynamic config script, removing first-open wait for key data-science apps and stabilizing peak-time experience.
+• Rebuilt our R/Shiny base on Ubuntu 24 with s6 init, reducing CVEs and giving us full control over the stack and graceful ECS shutdowns.
+• Shipped a test deployment of the Life-of-Asset R/Shiny app on ECS after enhancing our abc-sagemaker-python library for R/Shiny secrets; aligned with ME COE for domain secrets update.
+Impact: Lower cold-start latency, improved security posture and reliability, and a reusable, compliant pattern for future R/Shiny app onboardings.
