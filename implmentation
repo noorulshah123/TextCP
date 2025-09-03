@@ -2,3 +2,32 @@
 • Rebuilt our R/Shiny base on Ubuntu 24 with s6 init, reducing CVEs and giving us full control over the stack and graceful ECS shutdowns.
 • Shipped a test deployment of the Life-of-Asset R/Shiny app on ECS after enhancing our abc-sagemaker-python library for R/Shiny secrets; aligned with ME COE for domain secrets update.
 Impact: Lower cold-start latency, improved security posture and reliability, and a reusable, compliant pattern for future R/Shiny app onboardings.
+
+
+• ShinyProxy pre-initialisation + warmed-seat locking
+Implemented pre-warm for selected data-science apps with a startup script that sets defaults and injects dynamic parameters. Users are locked to pre-warmed, available seats, so they avoid ECS provisioning delay and experience near-instant first opens.
+(Add: p50/p95 before→after, #apps covered, minSeats/TTL.)
+
+• R/Shiny base image modernization (Ubuntu 24 + s6)
+Rebuilt the base from Ubuntu 24 LTS (with s6 as PID1), removing dependency on rocker/shiny and enabling faster image patching with a lower CVE surface.
+Note: We didn’t ship graceful ECS shutdown changes this month; the new base positions us to add that later.
+(Add: CVE scan delta, image tag/version, size.)
+
+• R/Shiny “Life-of-Asset” migration test on ECS (secrets standardised)
+Extended abc-sagemaker-python to fetch R/Shiny secrets consistently, coordinated with ME CoE for domain secrets, and completed a test deployment on ECS. This establishes a reusable, compliant pattern for future R/Shiny onboardings.
+(Add: MR/commit IDs, ECS service/task ARNs.)
+
+Impact
+• Faster launches (users skip ECS scale-up waits via warmed seats)
+• Improved security & patch cadence (Ubuntu 24 base, no rocker dependency)
+• Repeatable path for R/Shiny deployments across SageMaker-aligned domains
+
+
+Title (Aug 2025): Shifting from ~20 standalone ECS R/Shiny services to a SageMaker-aligned, ShinyProxy-orchestrated platform that pulls S3 apps.yml to assemble application.yml (with Redis persistence and Secrets Manager), adds pre-warmed seats to bypass ECS wait, and standardises on a modern Ubuntu 24 base to cut CVEs and speed patching.
+
+Highlights (Development only)
+• ShinyProxy pre-initialisation + warmed-seat locking — Implemented pre-warm for selected data-science apps with a startup script for defaults and dynamic parameters; users are locked to pre-warmed seats, skipping ECS scale-up wait and seeing near-instant first opens. (Add p50/p95 before→after, #apps, minSeats/TTL.)
+• R/Shiny base image modernisation (Ubuntu 24 + s6) — Rebuilt on Ubuntu 24 LTS, removing dependency on rocker/shiny, enabling faster image patching and a lower CVE surface. Note: graceful ECS shutdown changes weren’t in scope this month; the new base positions us to add that later. (Add CVE scan delta, tag/version.)
+• “Life-of-Asset” R/Shiny migration test on ECS (secrets standardised) — Extended abc-sagemaker-python for consistent R/Shiny secrets retrieval; coordinated with ME CoE for domain secrets; completed test deployment on ECS—creating a reusable, compliant pattern for future R/Shiny onboardings. (Add MR/commit IDs, service/task ARNs.)
+
+Impact — Faster launches (no cold-start wait), improved security & patch cadence (Ubuntu 24, no rocker dependency), and a repeatable path to onboard R/Shiny apps under SageMaker-aligned domains.
