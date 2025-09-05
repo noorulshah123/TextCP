@@ -1,0 +1,61 @@
+# Input: the log group name you want to check
+variable "log_group_name" {
+  type = string
+}
+
+# Query existing log groups by prefix (no error if none are found)
+data "aws_cloudwatch_log_groups" "candidate" {
+  log_group_name_prefix = var.log_group_name
+}
+
+# True if a log group with the exact name exists, else false
+locals {
+  log_group_exists = contains(
+    [for g in data.aws_cloudwatch_log_groups.candidate.log_groups : g.log_group_name],
+    var.log_group_name
+  )
+}
+
+# Example usage: only create the log group if it doesn't exist
+resource "aws_cloudwatch_log_group" "this" {
+  count = local.log_group_exists ? 0 : 1
+
+  name              = var.log_group_name
+  retention_in_days = 30
+}
+
+
+
+# Pass the final/constructed log group names into the module
+variable "log_group_names" {
+  type = list(string)
+}
+
+# Lookup per name using the plural data source (safe when not found)
+data "aws_cloudwatch_log_groups" "check" {
+  # Query each name as a prefix; the result may be empty and won't error
+  for_each = toset(var.log_group_names)
+
+  log_group_name_prefix = each.value
+}
+
+# Map of <name> => true/false
+locals {
+  log_group_exists = {
+    for name, ds in data.aws_cloudwatch_log_groups.check :
+    name => contains([for g in ds.log_groups : g.log_group_name], name)
+  }
+}
+
+# Example: create any that don't exist yet
+resource "aws_cloudwatch_log_group" "managed" {
+  for_each = {
+    for name, exists in local.log_group_exists : name => exists if !exists
+  }
+
+  name              = each.key
+  retention_in_days = 30
+}
+
+# Optional: expose the booleans to
+
