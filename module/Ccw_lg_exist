@@ -1,0 +1,24 @@
+# variables.tf
+variable "log_group_names" {
+  description = "Exact CloudWatch Log Group names to check"
+  type        = list(string)
+}
+
+# main.tf
+data "aws_cloudwatch_log_groups" "check" {
+  for_each              = toset(var.log_group_names)
+  log_group_name_prefix = each.value
+}
+
+locals {
+  exists_map = {
+    for name, ds in data.aws_cloudwatch_log_groups.check :
+    name => contains([for g in ds.log_groups : g.log_group_name], name)
+  }
+}
+
+# outputs.tf
+output "exists" {
+  description = "Map: log group name -> true/false"
+  value       = local.exists_map
+}
