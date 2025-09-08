@@ -1,0 +1,73 @@
+variable "log_group_names" {
+  description = "Exact CloudWatch Log Group names to check"
+  type        = list(string)
+}
+
+data "aws_cloudwatch_log_groups" "check" {
+  for_each              = toset(var.log_group_names)
+  log_group_name_prefix = each.value
+}
+
+locals {
+  # boolean per name
+  exists_map = {
+    for name, ds in data.aws_cloudwatch_log_groups.check :
+    name => anytrue([for g in ds.log_groups : g.log_group_name == name])
+  }
+
+  # string-or-null per name (name when exists, else null)
+  existing_name_map = {
+    for name, exists in local.exists_map :
+    name => (exists ? name : null)
+  }
+
+  # only existing (filtered) — optional convenience
+  existing_only = {
+    for name, exists in local.exists_map :
+    name => name if exists
+  }
+}
+
+output "exists" {
+  description = "Map<string,bool>: log group name -> true/false"
+  value       = local.exists_map
+}
+
+output "existing_names" {
+  description = "Map<string,nullable(string)>: name when exists else null"
+  value       = local.existing_name_map
+}
+
+output "existing_only" {
+  description = "Map<string,string>: contains only those that exist"
+  value       = local.existing_only
+}
+
+
+locals {
+  lg_a = "/aws/lambda/${var.env}-app-a"
+  lg_b = "/aws/lambda/${var.env}-app-b"
+}
+
+module "cw_check" {
+  source          = "./modules/cwlg_check_multi"
+  log_group_names = [local.lg_a, local.lg_b]
+}
+
+# Boolean wire-in
+module "lambda_a" {
+  source           = "./modules/lambda"
+  name             = "app-a"
+  log_group_exists = module.cw_check.exists[local.lg_a]              # true/false
+  existing_lg_name = module.cw_check.existing_names[local.lg_a]      # "/aws/..." or null
+}
+
+module "lambda_b" {
+  source           = "./modules/lambda"
+  name             = "app-b"
+  log_group_exists = module.cw_check.exists[local.lg_b]
+  existing_lg_name = module.cw_check.existing_names[local.lg_b]
+}
+variable "log_group_exists" { type = bool }
+variable "existing_lg_name" { type = string, default = null }
+
