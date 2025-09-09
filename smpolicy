@@ -1,0 +1,110 @@
+# domain execution role
+resource "aws_iam_role" "execution_domain_role" {
+  # ...
+  tags = merge(var.tags, {
+    Team     = var.sagemaker_domain_name
+    RoleType = "domain"
+  })
+}
+
+# user execution roles
+resource "aws_iam_role" "execution_role_for_user_profile" {
+  for_each = var.user_profiles
+  # ...
+  tags = merge(var.tags, {
+    Team                             = var.sagemaker_domain_name
+    RoleType                         = "user"
+    "sagemaker:user-profile-name"    = each.key
+  })
+}
+
+
+tags = merge(var.tags, {
+  Env   = var.env
+  Team  = var.sagemaker_domain_name
+  Shared = "true"  # <-- add this
+})
+
+
+data "aws_region" "cur" {}
+data "aws_caller_identity" "me" {}
+
+# Keep actions tight. Add write actions only if you need them.
+locals {
+  secrets_read_actions  = [
+    "secretsmanager:DescribeSecret",
+    "secretsmanager:GetSecretValue",
+    "secretsmanager:ListSecretVersionIds"
+  ]
+  secrets_write_actions = [
+    "secretsmanager:PutSecretValue",
+    "secretsmanager:UpdateSecret",
+    "secretsmanager:TagResource",
+    "secretsmanager:UntagResource"
+  ]
+}
+
+data "aws_iam_policy_document" "secrets_abac" {
+  # Shared secrets for the whole team (domain & user roles)
+  statement {
+    sid     = "AllowSharedSecretsForTeam"
+    effect  = "Allow"
+    actions = concat(local.secrets_read_actions, local.secrets_write_actions)
+    resources = [
+      "arn:aws:secretsmanager:${data.aws_region.cur.name}:${data.aws_caller_identity.me.account_id}:secret:/aap/${var.sagemaker_domain_name}/*"
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalTag/Team"
+      values   = ["${secretsmanager:ResourceTag/Team}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "secretsmanager:ResourceTag/Shared"
+      values   = ["true"]  # or use: variable = "secretsmanager:ResourceTag/awsuserid", values = ["all"]
+    }
+  }
+
+  # Each user can access only their own secrets (same Team + matching user-profile)
+  statement {
+    sid     = "AllowOwnUserSecrets"
+    effect  = "Allow"
+    actions = concat(local.secrets_read_actions, local.secrets_write_actions)
+    resources = [
+      "arn:aws:secretsmanager:${data.aws_region.cur.name}:${data.aws_caller_identity.me.account_id}:secret:/aap/${var.sagemaker_domain_name}/*"
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalTag/Team"
+      values   = ["${secretsmanager:ResourceTag/Team}"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalTag/RoleType"
+      values   = ["user"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:PrincipalTag/sagemaker:user-profile-name"
+      values   = ["${secretsmanager:ResourceTag/sagemaker:user-profile-name}"]
+    }
+  }
+
+  # Optional: hard guard across teams
+  statement {
+    sid     = "DenySecretsOutsideTeam"
+    effect  = "Deny"
+    actions = ["secretsmanager:*"]
+    resources = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:PrincipalTag/Team"
+      values   = ["${secretsmanager:ResourceTag/Team}"]
+    }
+  }
+}
+
+resource "aws_iam_policy" "secrets_abac" {
+  name_prefix = "sm-secrets-abac-"
+  policy      = data.aws_iam_policy_document.secrets_abac.json
+}
