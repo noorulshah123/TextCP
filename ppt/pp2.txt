@@ -1,0 +1,1465 @@
+Analysis & Learning Resources
+Table of Contents
+
+Executive Summary
+What Flyway Does Best - Detailed Analysis
+What Terraform Excels At - Comprehensive Scenarios
+Technical Limitations & Edge Cases
+Real-World Integration Patterns
+Comprehensive Learning Resources
+Decision Framework
+
+
+Executive Summary
+The fundamental difference between Terraform and Flyway lies in their architectural philosophy and operational model. Flyway operates on an imperative, sequential migration model where changes are applied in a specific order and cannot be reversed without creating new forward migrations. Terraform uses a declarative state management model where you describe the desired end state and the tool figures out how to achieve it. This difference has profound implications for what each tool can and cannot do effectively.
+
+What Flyway Does Best - Detailed Analysis
+1. Complex Data Migrations and Transformations
+Why Flyway Excels:
+Flyway is unmatched when dealing with data-level changes that require complex logic, multi-step transformations, or careful orchestration. These operations often require understanding the current data state, applying business logic, and ensuring data integrity throughout the process.
+Detailed Example: Multi-Step Data Migration
+sql-- V1__Initial_customer_table.sql
+CREATE TABLE customers (
+    id NUMBER PRIMARY KEY,
+    full_name VARCHAR(200),
+    email VARCHAR(255),
+    created_at TIMESTAMP
+);
+
+-- V2__Split_customer_name.sql
+-- This migration requires complex data transformation
+ALTER TABLE customers ADD COLUMN first_name VARCHAR(100);
+ALTER TABLE customers ADD COLUMN last_name VARCHAR(100);
+
+-- Complex data migration logic
+UPDATE customers 
+SET 
+    first_name = SPLIT_PART(full_name, ' ', 1),
+    last_name = CASE 
+        WHEN ARRAY_SIZE(SPLIT(full_name, ' ')) > 1 
+        THEN ARRAY_TO_STRING(ARRAY_SLICE(SPLIT(full_name, ' '), 1, ARRAY_SIZE(SPLIT(full_name, ' '))), ' ')
+        ELSE NULL
+    END
+WHERE full_name IS NOT NULL;
+
+-- V3__Add_customer_validation.sql
+-- Add constraints only after data is cleaned
+ALTER TABLE customers 
+ADD CONSTRAINT check_email 
+CHECK (REGEXP_LIKE(email, '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$'));
+
+-- V4__Create_customer_history.sql
+-- Create audit table and migrate historical data
+CREATE TABLE customer_history AS
+SELECT 
+    id,
+    full_name as original_name,
+    first_name,
+    last_name,
+    email,
+    created_at,
+    CURRENT_TIMESTAMP() as migration_timestamp,
+    'V4_MIGRATION' as migration_version
+FROM customers;
+
+-- V5__Drop_deprecated_column.sql
+-- Only safe to drop after confirming data migration success
+ALTER TABLE customers DROP COLUMN full_name;
+Why Terraform Can't Handle This:
+
+Terraform cannot execute conditional logic based on existing data
+It can't perform multi-step data transformations
+It has no concept of "wait until data is validated before proceeding"
+It can't handle rollback scenarios that require data preservation
+
+2. Stored Procedures, Functions, and Complex Database Logic
+Why Flyway Excels:
+Database logic like stored procedures, user-defined functions (UDFs), and complex triggers often contain business logic that evolves over time. Flyway can version these changes and handle the nuanced differences between creating, replacing, and modifying procedural code.
+Detailed Example: Evolving Business Logic
+sql-- V1__Create_initial_pricing_function.sql
+CREATE OR REPLACE FUNCTION calculate_customer_discount(customer_id NUMBER)
+RETURNS NUMBER
+LANGUAGE SQL
+AS
+$$
+    SELECT 
+        CASE 
+            WHEN COUNT(*) >= 10 THEN 0.15  -- 15% discount for 10+ orders
+            WHEN COUNT(*) >= 5 THEN 0.10   -- 10% discount for 5+ orders
+            ELSE 0
+        END
+    FROM orders
+    WHERE customer_id = customer_id
+$$;
+
+-- V2__Update_pricing_logic_for_loyalty.sql
+-- Business requirement changed: add time-based loyalty
+CREATE OR REPLACE FUNCTION calculate_customer_discount(customer_id NUMBER)
+RETURNS NUMBER
+LANGUAGE JAVASCRIPT
+AS
+$$
+    // Complex JavaScript logic for sophisticated calculations
+    var sql_query = `
+        SELECT 
+            COUNT(*) as order_count,
+            MIN(order_date) as first_order,
+            SUM(total_amount) as lifetime_value
+        FROM orders
+        WHERE customer_id = ?
+    `;
+    
+    var stmt = snowflake.createStatement({
+        sqlText: sql_query,
+        binds: [CUSTOMER_ID]
+    });
+    
+    var result = stmt.execute();
+    result.next();
+    
+    var orderCount = result.getColumnValue(1);
+    var firstOrder = result.getColumnValue(2);
+    var lifetimeValue = result.getColumnValue(3);
+    
+    // Complex business logic
+    var baseDiscount = 0;
+    var loyaltyBonus = 0;
+    var volumeBonus = 0;
+    
+    // Calculate base discount
+    if (orderCount >= 20) baseDiscount = 0.20;
+    else if (orderCount >= 10) baseDiscount = 0.15;
+    else if (orderCount >= 5) baseDiscount = 0.10;
+    
+    // Calculate loyalty bonus (years as customer)
+    var yearsAsCustomer = Math.floor((new Date() - new Date(firstOrder)) / (365 * 24 * 60 * 60 * 1000));
+    loyaltyBonus = Math.min(yearsAsCustomer * 0.01, 0.05); // Max 5% loyalty bonus
+    
+    // Calculate volume bonus
+    if (lifetimeValue > 100000) volumeBonus = 0.05;
+    else if (lifetimeValue > 50000) volumeBonus = 0.03;
+    
+    return Math.min(baseDiscount + loyaltyBonus + volumeBonus, 0.30); // Cap at 30%
+$$;
+
+-- V3__Add_error_handling_to_discount_function.sql
+-- Add comprehensive error handling and logging
+CREATE OR REPLACE PROCEDURE calculate_and_apply_discounts()
+RETURNS VARCHAR
+LANGUAGE JAVASCRIPT
+EXECUTE AS CALLER
+AS
+$$
+    var successCount = 0;
+    var errorCount = 0;
+    var errors = [];
+    
+    try {
+        // Get all active customers
+        var getCustomers = snowflake.execute({
+            sqlText: "SELECT id FROM customers WHERE status = 'ACTIVE'"
+        });
+        
+        while (getCustomers.next()) {
+            try {
+                var customerId = getCustomers.getColumnValue(1);
+                
+                // Calculate discount
+                var discount = snowflake.execute({
+                    sqlText: "SELECT calculate_customer_discount(?)",
+                    binds: [customerId]
+                }).getColumnValue(1);
+                
+                // Apply discount
+                snowflake.execute({
+                    sqlText: "UPDATE customers SET discount_rate = ? WHERE id = ?",
+                    binds: [discount, customerId]
+                });
+                
+                successCount++;
+                
+            } catch (err) {
+                errorCount++;
+                errors.push({customerId: customerId, error: err.toString()});
+            }
+        }
+        
+        // Log results
+        snowflake.execute({
+            sqlText: `INSERT INTO discount_calculation_log 
+                     (run_date, success_count, error_count, error_details) 
+                     VALUES (CURRENT_TIMESTAMP(), ?, ?, ?)`,
+            binds: [successCount, errorCount, JSON.stringify(errors)]
+        });
+        
+        return `Processed ${successCount} customers successfully, ${errorCount} errors`;
+        
+    } catch (err) {
+        throw `Fatal error in discount calculation: ${err}`;
+    }
+$$;
+Why Terraform Struggles:
+
+Terraform can create the stored procedure structure but cannot manage the evolution of business logic within it
+It cannot handle version-specific logic changes
+It cannot test the procedure logic before deployment
+It treats procedures as opaque text blocks, not understanding their internal dependencies
+
+3. Time-Sensitive and Conditional Migrations
+Why Flyway Excels:
+Some migrations must be executed at specific times, in specific conditions, or with specific preconditions. Flyway's callback system and conditional execution capabilities handle these scenarios elegantly.
+Detailed Example: Conditional and Time-Based Migrations
+sql-- V1__Conditional_index_creation.sql
+-- Only create index during maintenance window
+DO $$
+DECLARE
+    current_hour INTEGER;
+    active_queries INTEGER;
+BEGIN
+    -- Check current time
+    SELECT EXTRACT(HOUR FROM CURRENT_TIMESTAMP) INTO current_hour;
+    
+    -- Check active query count
+    SELECT COUNT(*) INTO active_queries 
+    FROM INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION
+    WHERE EXECUTION_STATUS = 'RUNNING';
+    
+    -- Only proceed if it's maintenance window (2-4 AM) and low activity
+    IF current_hour BETWEEN 2 AND 4 AND active_queries < 5 THEN
+        -- Create large index with specific options
+        CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_orders_customer_date 
+        ON orders(customer_id, order_date) 
+        WHERE status != 'CANCELLED';
+        
+        -- Log the creation
+        INSERT INTO migration_log (migration_name, executed_at, execution_time_ms)
+        VALUES ('V1_conditional_index', CURRENT_TIMESTAMP, 
+                DATEDIFF('millisecond', start_time, CURRENT_TIMESTAMP));
+    ELSE
+        -- Schedule for later
+        INSERT INTO pending_migrations (migration_name, reason, scheduled_for)
+        VALUES ('V1_conditional_index', 
+                'Outside maintenance window or high activity', 
+                DATE_TRUNC('day', CURRENT_DATE + 1) + INTERVAL '2 hours');
+        
+        RAISE NOTICE 'Migration deferred to maintenance window';
+    END IF;
+END $$;
+
+-- R__Repeatable_cleanup.sql (Repeatable migration)
+-- Runs every time to clean up old data
+DELETE FROM audit_log 
+WHERE created_at < DATEADD('day', -90, CURRENT_DATE)
+AND archived = TRUE;
+
+-- Vacuum and analyze for performance
+ALTER TABLE audit_log CLUSTER BY (created_at);
+4. Database-Specific Advanced Features
+Why Flyway Excels:
+Each database system has unique features that require specific SQL syntax and execution patterns. Flyway can handle these database-specific nuances.
+Detailed Snowflake-Specific Examples:
+sql-- V1__Create_dynamic_tables.sql
+-- Snowflake's Dynamic Tables (new feature)
+CREATE OR REPLACE DYNAMIC TABLE customer_summary
+    TARGET_LAG = '1 hour'
+    WAREHOUSE = compute_wh
+    AS
+    SELECT 
+        c.id,
+        c.name,
+        COUNT(DISTINCT o.id) as total_orders,
+        SUM(o.total_amount) as lifetime_value,
+        MAX(o.order_date) as last_order_date,
+        DATEDIFF('day', MAX(o.order_date), CURRENT_DATE) as days_since_last_order
+    FROM customers c
+    LEFT JOIN orders o ON c.id = o.customer_id
+    GROUP BY c.id, c.name;
+
+-- V2__Create_external_tables.sql
+-- External tables with complex file format
+CREATE OR REPLACE FILE FORMAT json_format
+    TYPE = 'JSON'
+    COMPRESSION = 'GZIP'
+    STRIP_OUTER_ARRAY = TRUE
+    DATE_FORMAT = 'YYYY-MM-DD'
+    TIME_FORMAT = 'HH24:MI:SS'
+    TIMESTAMP_FORMAT = 'YYYY-MM-DD HH24:MI:SS.FF3';
+
+CREATE OR REPLACE EXTERNAL TABLE raw_events (
+    event_data VARIANT AS (VALUE::VARIANT)
+)
+WITH LOCATION = @my_s3_stage/events/
+FILE_FORMAT = json_format
+AUTO_REFRESH = TRUE
+AWS_SNS_TOPIC = 'arn:aws:sns:us-east-1:123456789:snowflake-events';
+
+-- V3__Create_materialized_view_with_clustering.sql
+-- Complex materialized view with clustering
+CREATE OR REPLACE MATERIALIZED VIEW sales_by_region_mv
+    CLUSTER BY (region, sale_date)
+    AS
+    WITH recursive_hierarchy AS (
+        -- Complex CTE with recursive logic
+        SELECT 
+            region_id,
+            parent_region_id,
+            region_name,
+            1 as level
+        FROM regions
+        WHERE parent_region_id IS NULL
+        
+        UNION ALL
+        
+        SELECT 
+            r.region_id,
+            r.parent_region_id,
+            h.region_name || ' > ' || r.region_name,
+            h.level + 1
+        FROM regions r
+        JOIN recursive_hierarchy h ON r.parent_region_id = h.region_id
+    )
+    SELECT 
+        h.region_name,
+        DATE_TRUNC('day', s.sale_date) as sale_date,
+        COUNT(*) as transaction_count,
+        SUM(s.amount) as total_sales,
+        AVG(s.amount) as avg_sale,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY s.amount) as median_sale
+    FROM sales s
+    JOIN stores st ON s.store_id = st.id
+    JOIN recursive_hierarchy h ON st.region_id = h.region_id
+    GROUP BY h.region_name, DATE_TRUNC('day', s.sale_date);
+
+-- V4__Create_streams_and_tasks.sql
+-- Snowflake Streams and Tasks for CDC
+CREATE OR REPLACE STREAM customer_changes 
+    ON TABLE customers
+    APPEND_ONLY = FALSE
+    SHOW_INITIAL_ROWS = TRUE;
+
+CREATE OR REPLACE TASK process_customer_changes
+    WAREHOUSE = compute_wh
+    SCHEDULE = 'USING CRON 0 */1 * * * UTC'
+    WHEN SYSTEM$STREAM_HAS_DATA('customer_changes')
+AS
+    MERGE INTO customer_summary_current cs
+    USING (
+        SELECT 
+            id,
+            name,
+            email,
+            METADATA$ACTION as action,
+            METADATA$ISUPDATE as is_update
+        FROM customer_changes
+    ) changes
+    ON cs.customer_id = changes.id
+    WHEN MATCHED AND changes.action = 'DELETE' THEN
+        DELETE
+    WHEN MATCHED AND changes.is_update THEN
+        UPDATE SET 
+            cs.name = changes.name,
+            cs.email = changes.email,
+            cs.last_updated = CURRENT_TIMESTAMP()
+    WHEN NOT MATCHED AND changes.action = 'INSERT' THEN
+        INSERT (customer_id, name, email, created_at, last_updated)
+        VALUES (changes.id, changes.name, changes.email, 
+                CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP());
+
+ALTER TASK process_customer_changes RESUME;
+5. Zero-Downtime Migrations
+Why Flyway Excels:
+Production databases often require migrations that don't interrupt service. Flyway can orchestrate complex multi-phase migrations.
+Detailed Example: Zero-Downtime Column Rename
+sql-- Phase 1: V1__Add_new_column.sql
+-- Add new column without removing old one
+ALTER TABLE orders ADD COLUMN customer_identifier NUMBER;
+
+-- Phase 2: V2__Dual_write_trigger.sql
+-- Create trigger for dual writes
+CREATE OR REPLACE TRIGGER dual_write_customer_id
+    BEFORE INSERT OR UPDATE ON orders
+    FOR EACH ROW
+    EXECUTE FUNCTION sync_customer_identifier();
+
+CREATE OR REPLACE FUNCTION sync_customer_identifier()
+RETURNS TRIGGER
+LANGUAGE SQL
+AS
+$$
+    BEGIN
+        IF NEW.customer_id IS NOT NULL THEN
+            NEW.customer_identifier := NEW.customer_id;
+        ELSIF NEW.customer_identifier IS NOT NULL THEN
+            NEW.customer_id := NEW.customer_identifier;
+        END IF;
+        RETURN NEW;
+    END;
+$$;
+
+-- Phase 3: V3__Backfill_data.sql
+-- Backfill in batches to avoid locking
+DO $$
+DECLARE
+    batch_size INTEGER := 10000;
+    offset_val INTEGER := 0;
+    total_rows INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO total_rows FROM orders WHERE customer_identifier IS NULL;
+    
+    WHILE offset_val < total_rows LOOP
+        UPDATE orders 
+        SET customer_identifier = customer_id
+        WHERE id IN (
+            SELECT id FROM orders 
+            WHERE customer_identifier IS NULL
+            ORDER BY id
+            LIMIT batch_size
+            OFFSET offset_val
+        );
+        
+        -- Log progress
+        INSERT INTO migration_progress (migration_name, rows_processed, total_rows)
+        VALUES ('V3_backfill_customer_identifier', offset_val + batch_size, total_rows);
+        
+        offset_val := offset_val + batch_size;
+        
+        -- Brief pause to reduce load
+        CALL SYSTEM$WAIT(1);
+    END LOOP;
+END $$;
+
+-- Phase 4: V4__Switch_to_new_column.sql (After application deployment)
+-- Application now uses customer_identifier
+ALTER TABLE orders ALTER COLUMN customer_identifier SET NOT NULL;
+
+-- Phase 5: V5__Cleanup_old_column.sql (After verification)
+-- Remove trigger and old column
+DROP TRIGGER IF EXISTS dual_write_customer_id ON orders;
+DROP FUNCTION IF EXISTS sync_customer_identifier();
+ALTER TABLE orders DROP COLUMN customer_id;
+ALTER TABLE orders RENAME COLUMN customer_identifier TO customer_id;
+
+What Terraform Excels At - Comprehensive Scenarios
+1. Infrastructure Provisioning and Configuration
+Why Terraform Excels:
+Terraform shines when managing infrastructure resources and their configurations. It maintains desired state and automatically corrects drift.
+Comprehensive Example: Complete Data Platform Infrastructure
+hcl# modules/data_platform/variables.tf
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  
+  validation {
+    condition     = contains(["dev", "staging", "prod"], var.environment)
+    error_message = "Environment must be dev, staging, or prod."
+  }
+}
+
+variable "data_retention_policy" {
+  description = "Data retention policies by data classification"
+  type = map(object({
+    retention_days = number
+    fail_safe_days = number
+  }))
+  default = {
+    "public" = {
+      retention_days = 7
+      fail_safe_days = 1
+    }
+    "internal" = {
+      retention_days = 30
+      fail_safe_days = 7
+    }
+    "confidential" = {
+      retention_days = 90
+      fail_safe_days = 30
+    }
+  }
+}
+
+# modules/data_platform/main.tf
+locals {
+  # Environment-specific configurations
+  warehouse_configs = {
+    dev = {
+      size         = "X-SMALL"
+      min_clusters = 1
+      max_clusters = 1
+      scaling_policy = "STANDARD"
+      auto_suspend = 60
+    }
+    staging = {
+      size         = "SMALL"
+      min_clusters = 1
+      max_clusters = 2
+      scaling_policy = "STANDARD"
+      auto_suspend = 300
+    }
+    prod = {
+      size         = "MEDIUM"
+      min_clusters = 2
+      max_clusters = 10
+      scaling_policy = "ECONOMY"
+      auto_suspend = 600
+    }
+  }
+  
+  current_config = local.warehouse_configs[var.environment]
+}
+
+# Resource Monitor for Cost Control
+resource "snowflake_resource_monitor" "monthly_budget" {
+  name         = "${upper(var.environment)}_MONTHLY_BUDGET"
+  credit_quota = var.environment == "prod" ? 1000 : 100
+  
+  frequency       = "MONTHLY"
+  start_timestamp = formatdate("YYYY-MM-DD HH:mm", timestamp())
+  
+  notify_triggers = [50, 75, 90, 95]
+  
+  suspend_triggers        = [100]
+  suspend_immediate_triggers = [110]
+  
+  notify_users = ["FINANCE_TEAM", "DATA_TEAM_LEAD"]
+}
+
+# Virtual Warehouses with auto-scaling
+resource "snowflake_warehouse" "compute" {
+  for_each = {
+    "general"   = { purpose = "General compute", size_override = null }
+    "loading"   = { purpose = "Data loading", size_override = "LARGE" }
+    "analytics" = { purpose = "Analytics queries", size_override = "X-LARGE" }
+    "transform" = { purpose = "DBT transformations", size_override = "MEDIUM" }
+  }
+  
+  name               = "${upper(var.environment)}_${upper(each.key)}_WH"
+  warehouse_size     = coalesce(each.value.size_override, local.current_config.size)
+  min_cluster_count  = local.current_config.min_clusters
+  max_cluster_count  = local.current_config.max_clusters
+  scaling_policy     = local.current_config.scaling_policy
+  auto_suspend       = local.current_config.auto_suspend
+  auto_resume        = true
+  initially_suspended = var.environment != "prod"
+  
+  resource_monitor = snowflake_resource_monitor.monthly_budget.name
+  
+  comment = "Managed by Terraform - ${each.value.purpose}"
+  
+  statement_timeout_in_seconds         = 3600
+  statement_queued_timeout_in_seconds  = 600
+  max_concurrency_level                = each.key == "analytics" ? 10 : 8
+  
+  warehouse_type = "STANDARD"
+  enable_query_acceleration = each.key == "analytics" && var.environment == "prod"
+  query_acceleration_max_scale_factor = each.key == "analytics" ? 8 : 0
+}
+
+# Database hierarchy with different retention policies
+resource "snowflake_database" "databases" {
+  for_each = {
+    "raw"         = { classification = "internal", transient = false }
+    "staging"     = { classification = "internal", transient = true }
+    "analytics"   = { classification = "public", transient = false }
+    "sensitive"   = { classification = "confidential", transient = false }
+  }
+  
+  name                        = "${upper(var.environment)}_${upper(each.key)}_DB"
+  data_retention_time_in_days = var.data_retention_policy[each.value.classification].retention_days
+  
+  is_transient = each.value.transient
+  
+  comment = "Managed by Terraform - ${each.value.classification} classification"
+  
+  # Replication configuration for production
+  dynamic "replication_configuration" {
+    for_each = var.environment == "prod" ? [1] : []
+    content {
+      ignore_edition_check = true
+    }
+  }
+}
+
+# Schemas with organized structure
+locals {
+  schema_definitions = {
+    raw = {
+      "landing"     = "Raw data landing zone"
+      "archive"     = "Historical raw data"
+      "quarantine"  = "Failed data loads"
+    }
+    staging = {
+      "intermediate" = "Intermediate transformations"
+      "validation"   = "Data quality checks"
+    }
+    analytics = {
+      "core"        = "Core business entities"
+      "marts"       = "Data marts for consumers"
+      "reporting"   = "Reporting views"
+    }
+    sensitive = {
+      "pii"         = "Personally identifiable information"
+      "financial"   = "Financial data"
+      "compliance"  = "Compliance and audit data"
+    }
+  }
+}
+
+resource "snowflake_schema" "schemas" {
+  for_each = merge([
+    for db_key, schemas in local.schema_definitions : {
+      for schema_key, description in schemas :
+      "${db_key}_${schema_key}" => {
+        database    = snowflake_database.databases[db_key].name
+        schema_name = upper(schema_key)
+        description = description
+      }
+    }
+  ]...)
+  
+  database = each.value.database
+  name     = each.value.schema_name
+  comment  = each.value.description
+  
+  is_transient = contains(["staging", "intermediate"], lower(each.value.schema_name))
+  is_managed = true
+  
+  data_retention_days = (
+    contains(["archive", "compliance"], lower(each.value.schema_name)) 
+    ? 365 
+    : null
+  )
+}
+
+# Network Policy for Security
+resource "snowflake_network_policy" "main" {
+  name    = "${upper(var.environment)}_NETWORK_POLICY"
+  comment = "Managed by Terraform - ${var.environment} environment"
+  
+  allowed_ip_list = var.environment == "prod" ? [
+    "203.0.113.0/24",  # Office network
+    "198.51.100.0/24", # VPN range
+    "10.0.0.0/8"       # Private network
+  ] : ["0.0.0.0/0"]    # Open for non-prod
+  
+  blocked_ip_list = [
+    "192.0.2.0/24",    # Known malicious range
+    "198.51.100.99"    # Specific blocked IP
+  ]
+}
+
+# Notification Integration
+resource "snowflake_notification_integration" "slack" {
+  name    = "${upper(var.environment)}_SLACK_NOTIFICATIONS"
+  comment = "Slack notifications for ${var.environment}"
+  
+  enabled = true
+  type    = "WEBHOOK"
+  
+  notification_provider = "AZURE_EVENT_GRID"
+  direction            = "OUTBOUND"
+  
+  azure_event_grid_topic_endpoint = var.slack_webhook_endpoint
+  azure_tenant_id                  = var.azure_tenant_id
+}
+
+# Storage Integration for External Stages
+resource "snowflake_storage_integration" "s3" {
+  name    = "${upper(var.environment)}_S3_INTEGRATION"
+  comment = "S3 storage integration for ${var.environment}"
+  
+  enabled = true
+  type    = "EXTERNAL_STAGE"
+  
+  storage_provider = "S3"
+  
+  storage_aws_role_arn = var.aws_role_arn
+  storage_allowed_locations = [
+    "s3://data-lake-${var.environment}/raw/",
+    "s3://data-lake-${var.environment}/processed/"
+  ]
+  
+  storage_blocked_locations = [
+    "s3://data-lake-${var.environment}/sensitive/"
+  ]
+}
+
+# Stages for data loading
+resource "snowflake_stage" "data_stages" {
+  for_each = {
+    "json_stage" = { 
+      file_format = "JSON", 
+      auto_ingest = true,
+      path = "json/"
+    }
+    "csv_stage" = { 
+      file_format = "CSV", 
+      auto_ingest = true,
+      path = "csv/"
+    }
+    "parquet_stage" = { 
+      file_format = "PARQUET", 
+      auto_ingest = false,
+      path = "parquet/"
+    }
+  }
+  
+  name     = "${upper(var.environment)}_${upper(each.key)}"
+  database = snowflake_database.databases["raw"].name
+  schema   = snowflake_schema.schemas["raw_landing"].name
+  
+  storage_integration = snowflake_storage_integration.s3.name
+  url                = "s3://data-lake-${var.environment}/${each.value.path}"
+  
+  file_format = "FORMAT_NAME = ${each.value.file_format}"
+  
+  copy_options = "ON_ERROR = 'SKIP_FILE'"
+  
+  # Enable auto-ingest via AWS SNS
+  dynamic "snowpipe_auto_ingest" {
+    for_each = each.value.auto_ingest ? [1] : []
+    content {
+      enabled = true
+    }
+  }
+  
+  comment = "Managed by Terraform - ${each.value.file_format} data stage"
+}
+2. Role-Based Access Control (RBAC) at Scale
+Why Terraform Excels:
+Managing complex permission hierarchies across hundreds of users and resources is where Terraform's declarative model shines.
+Comprehensive RBAC Example:
+hcl# rbac/variables.tf
+variable "departments" {
+  description = "Department structure with users"
+  type = map(object({
+    users = list(string)
+    lead  = string
+    access_level = string
+  }))
+  default = {
+    "data_engineering" = {
+      users = ["user1", "user2", "user3"]
+      lead  = "lead1"
+      access_level = "full"
+    }
+    "analytics" = {
+      users = ["analyst1", "analyst2"]
+      lead  = "lead2"
+      access_level = "read"
+    }
+    "finance" = {
+      users = ["fin1", "fin2"]
+      lead  = "finlead"
+      access_level = "restricted"
+    }
+  }
+}
+
+# rbac/main.tf
+# Create hierarchical role structure
+resource "snowflake_role" "department_roles" {
+  for_each = var.departments
+  
+  name    = "${upper(var.environment)}_${upper(each.key)}_ROLE"
+  comment = "Department role for ${each.key}"
+}
+
+resource "snowflake_role" "department_lead_roles" {
+  for_each = var.departments
+  
+  name    = "${upper(var.environment)}_${upper(each.key)}_LEAD_ROLE"
+  comment = "Lead role for ${each.key}"
+}
+
+# Create functional roles
+locals {
+  functional_roles = {
+    "LOADER"      = "Can load data into staging"
+    "TRANSFORMER" = "Can run transformations"
+    "REPORTER"    = "Can create reports"
+    "AUDITOR"    = "Read-only access for audit"
+  }
+}
+
+resource "snowflake_role" "functional_roles" {
+  for_each = local.functional_roles
+  
+  name    = "${upper(var.environment)}_${each.key}_ROLE"
+  comment = each.value
+}
+
+# Role hierarchy
+resource "snowflake_role_grants" "hierarchy" {
+  for_each = var.departments
+  
+  role_name = snowflake_role.department_lead_roles[each.key].name
+  
+  roles = [
+    snowflake_role.department_roles[each.key].name,
+    "SYSADMIN"
+  ]
+}
+
+# Create users
+resource "snowflake_user" "users" {
+  for_each = merge([
+    for dept_key, dept in var.departments : {
+      for user in concat(dept.users, [dept.lead]) :
+      "${dept_key}_${user}" => {
+        username    = user
+        department  = dept_key
+        is_lead    = user == dept.lead
+        email      = "${user}@company.com"
+      }
+    }
+  ]...)
+  
+  name         = upper(each.value.username)
+  login_name   = each.value.username
+  display_name = each.value.username
+  email        = each.value.email
+  
+  default_warehouse = snowflake_warehouse.compute["general"].name
+  default_role      = each.value.is_lead ? 
+    snowflake_role.department_lead_roles[each.value.department].name :
+    snowflake_role.department_roles[each.value.department].name
+  
+  must_change_password = true
+  disabled            = false
+  
+  comment = "Managed by Terraform - ${each.value.department} department"
+}
+
+# Grant roles to users
+resource "snowflake_role_grants" "user_roles" {
+  for_each = merge([
+    for dept_key, dept in var.departments : {
+      for user in concat(dept.users, [dept.lead]) :
+      "${dept_key}_${user}" => {
+        user       = upper(user)
+        role       = user == dept.lead ? 
+          snowflake_role.department_lead_roles[dept_key].name :
+          snowflake_role.department_roles[dept_key].name
+      }
+    }
+  ]...)
+  
+  role_name = each.value.role
+  users     = [each.value.user]
+}
+
+# Database permissions matrix
+locals {
+  permission_matrix = {
+    "data_engineering" = {
+      "raw"       = ["USAGE", "CREATE", "MODIFY", "MONITOR"]
+      "staging"   = ["USAGE", "CREATE", "MODIFY", "MONITOR"]
+      "analytics" = ["USAGE", "CREATE", "MODIFY", "MONITOR"]
+      "sensitive" = ["USAGE"]
+    }
+    "analytics" = {
+      "raw"       = []
+      "staging"   = ["USAGE"]
+      "analytics" = ["USAGE", "CREATE", "MONITOR"]
+      "sensitive" = []
+    }
+    "finance" = {
+      "raw"       = []
+      "staging"   = []
+      "analytics" = ["USAGE", "MONITOR"]
+      "sensitive" = ["USAGE", "MONITOR"]
+    }
+  }
+}
+
+# Apply database grants based on matrix
+resource "snowflake_database_grant" "grants" {
+  for_each = merge([
+    for dept_key, databases in local.permission_matrix : {
+      for db_key, privileges in databases : 
+      "${dept_key}_${db_key}" => {
+        database   = snowflake_database.databases[db_key].name
+        privilege  = privileges
+        role       = snowflake_role.department_roles[dept_key].name
+      }
+      if length(privileges) > 0
+    }
+  ]...)
+  
+  database_name = each.value.database
+  
+  dynamic "privilege" {
+    for_each = each.value.privilege
+    content {
+      privilege = privilege.value
+    }
+  }
+  
+  roles = [each.value.role]
+  
+  with_grant_option = false
+}
+
+# Warehouse usage grants
+resource "snowflake_warehouse_grant" "usage" {
+  for_each = {
+    for pair in setproduct(keys(var.departments), keys(snowflake_warehouse.compute)) :
+    "${pair[0]}_${pair[1]}" => {
+      department = pair[0]
+      warehouse  = pair[1]
+    }
+  }
+  
+  warehouse_name = snowflake_warehouse.compute[each.value.warehouse].name
+  privilege      = "USAGE"
+  
+  roles = [
+    snowflake_role.department_roles[each.value.department].name,
+    snowflake_role.department_lead_roles[each.value.department].name
+  ]
+  
+  with_grant_option = false
+}
+
+# Row-level security policies
+resource "snowflake_row_access_policy" "department_isolation" {
+  name     = "${upper(var.environment)}_DEPARTMENT_ISOLATION_POLICY"
+  database = snowflake_database.databases["analytics"].name
+  schema   = snowflake_schema.schemas["analytics_core"].name
+  
+  signature = {
+    "DEPARTMENT" = "VARCHAR"
+  }
+  
+  row_access_expression = <<-EOT
+    CASE 
+      WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'SYSADMIN') THEN TRUE
+      WHEN CURRENT_ROLE() LIKE '%DATA_ENGINEERING%' THEN TRUE
+      WHEN CURRENT_ROLE() LIKE '%' || DEPARTMENT || '%' THEN TRUE
+      ELSE FALSE
+    END
+  EOT
+  
+  comment = "Isolate data access by department"
+}
+
+# Masking policies for PII
+resource "snowflake_masking_policy" "pii_masking" {
+  name     = "${upper(var.environment)}_PII_MASKING"
+  database = snowflake_database.databases["sensitive"].name
+  schema   = snowflake_schema.schemas["sensitive_pii"].name
+  
+  signature {
+    column {
+      name = "VAL"
+      type = "VARCHAR"
+    }
+  }
+  
+  masking_expression = <<-EOT
+    CASE
+      WHEN CURRENT_ROLE() IN ('ACCOUNTADMIN', 'PRIVACY_OFFICER') THEN VAL
+      WHEN CURRENT_ROLE() LIKE '%_LEAD_ROLE' THEN REGEXP_REPLACE(VAL, '.', '*', 2)
+      ELSE '***MASKED***'
+    END
+  EOT
+  
+  return_data_type = "VARCHAR"
+  comment          = "PII data masking policy"
+}
+3. Multi-Environment Management
+Why Terraform Excels:
+Terraform workspaces and modules enable consistent multi-environment deployments with environment-specific variations.
+Complete Multi-Environment Setup:
+hcl# environments/main.tf
+module "snowflake_environment" {
+  source = "../modules/complete_environment"
+  
+  environment = terraform.workspace
+  
+  # Environment-specific configurations
+  config = {
+    dev = {
+      warehouse_size       = "X-SMALL"
+      max_clusters        = 2
+      retention_days      = 1
+      enable_monitoring   = false
+      enable_replication  = false
+      allowed_regions     = ["US-EAST-1"]
+    }
+    staging = {
+      warehouse_size       = "SMALL"
+      max_clusters        = 4
+      retention_days      = 7
+      enable_monitoring   = true
+      enable_replication  = false
+      allowed_regions     = ["US-EAST-1", "US-WEST-2"]
+    }
+    prod = {
+      warehouse_size       = "LARGE"
+      max_clusters        = 10
+      retention_days      = 90
+      enable_monitoring   = true
+      enable_replication  = true
+      allowed_regions     = ["US-EAST-1", "US-WEST-2", "EU-WEST-1"]
+    }
+  }[terraform.workspace]
+  
+  # Common configurations
+  tags = {
+    ManagedBy   = "Terraform"
+    Environment = terraform.workspace
+    CostCenter  = "DataPlatform"
+    Project     = "Snowflake-Migration"
+  }
+}
+
+# Environment-specific outputs
+output "environment_details" {
+  value = {
+    environment = terraform.workspace
+    warehouses  = module.snowflake_environment.warehouse_names
+    databases   = module.snowflake_environment.database_names
+    primary_region = module.snowflake_environment.primary_region
+    
+    endpoints = {
+      snowflake = "https://${var.account}.snowflakecomputing.com"
+      monitoring = terraform.workspace == "prod" ? 
+        "https://monitoring.company.com/snowflake/${terraform.workspace}" : 
+        null
+    }
+  }
+}
+
+Technical Limitations & Edge Cases
+Terraform Limitations with Snowflake
+
+Cannot Handle Data-Level Operations
+
+No ability to INSERT, UPDATE, DELETE data
+Cannot perform data quality checks
+Cannot execute conditional logic based on data
+
+
+Limited Stored Procedure Management
+
+Can create procedure structure but not debug logic
+Cannot version control internal procedure changes effectively
+No ability to test procedure execution
+
+
+No Migration Rollback Mechanism
+
+Terraform destroy is not the same as migration rollback
+Cannot preserve data during infrastructure changes
+No built-in migration history
+
+
+State File Limitations
+
+Large environments can have massive state files
+State file corruption can be catastrophic
+Requires careful state file management
+
+
+Provider Limitations
+
+Not all Snowflake features are supported
+Provider updates can introduce breaking changes
+Some operations require manual SQL execution
+
+
+
+Flyway Limitations with Infrastructure
+
+No State Management
+
+Cannot detect drift from desired configuration
+No way to know current infrastructure state
+Manual tracking required for infrastructure changes
+
+
+No Declarative Configuration
+
+Must write imperative scripts for each change
+Cannot easily replicate environments
+No built-in rollback for infrastructure
+
+
+Limited Idempotency
+
+Scripts run once and tracked in history
+Cannot re-run to ensure desired state
+Manual intervention for failed migrations
+
+
+No Resource Dependencies
+
+Cannot model complex resource relationships
+No automatic ordering of infrastructure creation
+Manual dependency management
+
+
+
+
+Real-World Integration Patterns
+Pattern 1: Terraform Creates, Flyway Populates
+yaml# GitLab CI/CD Pipeline
+stages:
+  - terraform-plan
+  - terraform-apply
+  - flyway-migrate
+  - validate
+
+terraform-apply:
+  stage: terraform-apply
+  script:
+    - terraform init
+    - terraform apply -auto-approve
+    - terraform output -json > infrastructure.json
+  artifacts:
+    paths:
+      - infrastructure.json
+
+flyway-migrate:
+  stage: flyway-migrate
+  dependencies:
+    - terraform-apply
+  script:
+    - export DB_URL=$(jq -r '.database_url.value' infrastructure.json)
+    - flyway migrate -url=$DB_URL
+Pattern 2: Flyway Callbacks Trigger Terraform
+sql-- flyway/callbacks/afterMigrate.sql
+-- Trigger Terraform to create indexes after migration
+INSERT INTO terraform_triggers (
+    trigger_type,
+    resource_type,
+    action,
+    parameters,
+    triggered_at
+) VALUES (
+    'CREATE_INDEX',
+    'snowflake_table',
+    'apply',
+    '{"table": "customers", "columns": ["email", "created_at"]}',
+    CURRENT_TIMESTAMP()
+);
+Pattern 3: Hybrid Management with Clear Boundaries
+hcl# Terraform manages structure
+resource "snowflake_table" "customers" {
+  database = snowflake_database.main.name
+  schema   = snowflake_schema.main.name
+  name     = "CUSTOMERS"
+  
+  # Only define structure, not data
+  column {
+    name = "ID"
+    type = "NUMBER"
+  }
+  
+  # Prevent Terraform from managing certain aspects
+  lifecycle {
+    ignore_changes = [
+      comment,  # Allow Flyway to update comments
+      cluster_by  # Allow Flyway to manage clustering
+    ]
+  }
+}
+sql-- Flyway manages data and logic
+-- V1__Populate_customers.sql
+-- Assumes table structure exists from Terraform
+INSERT INTO CUSTOMERS (ID, NAME, EMAIL)
+SELECT 
+    SEQ_CUSTOMER_ID.NEXTVAL,
+    'Customer ' || SEQ_CUSTOMER_ID.NEXTVAL,
+    'customer' || SEQ_CUSTOMER_ID.NEXTVAL || '@example.com'
+FROM TABLE(GENERATOR(ROWCOUNT => 1000));
+
+-- Add business logic
+ALTER TABLE CUSTOMERS 
+ADD CONSTRAINT email_unique UNIQUE (EMAIL);
+
+Comprehensive Learning Resources
+Official Documentation
+Terraform Resources
+
+HashiCorp Learn Platform
+
+URL: https://learn.hashicorp.com/terraform
+Start with: "Get Started - AWS" (concepts apply to Snowflake)
+Recommended Path: Infrastructure as Code → Terraform Basics → Advanced Patterns
+
+
+Terraform Documentation
+
+URL: https://www.terraform.io/docs
+Key Sections: Configuration Language, CLI Commands, State Management
+Deep Dive: Backend Configuration, Workspaces, Modules
+
+
+Snowflake Terraform Provider
+
+URL: https://registry.terraform.io/providers/Snowflake-Labs/snowflake/latest/docs
+GitHub: https://github.com/Snowflake-Labs/terraform-provider-snowflake
+Examples: Look for examples/ directory in GitHub repo
+
+
+
+Flyway Resources
+
+Flyway Documentation
+
+URL: https://flywaydb.org/documentation/
+Key Topics: Migrations, Callbacks, Configuration
+Snowflake-Specific: https://flywaydb.org/documentation/database/snowflake
+
+
+Flyway University
+
+URL: https://flywaydb.org/documentation/getstarted/
+Interactive tutorials and examples
+Best practices guide
+
+
+Redgate Resources (Flyway's parent company)
+
+URL: https://www.red-gate.com/hub/university/courses/flyway
+Free courses on database DevOps
+Webinars and case studies
+
+
+
+Snowflake Resources
+
+Snowflake Documentation
+
+URL: https://docs.snowflake.com/
+Essential Reading: SQL Reference, User Guide, Developer Guide
+Architecture: https://docs.snowflake.com/en/user-guide/intro-key-concepts
+
+
+Snowflake University
+
+URL: https://learn.snowflake.com/
+Free Courses: Snowflake Essentials, Advanced Features
+Hands-on Labs included
+
+
+Snowflake Quickstarts
+
+URL: https://quickstarts.snowflake.com/
+Terraform Quickstart: "Terraforming Snowflake"
+Step-by-step tutorials
+
+
+
+Books and Long-Form Content
+
+"Terraform: Up & Running" by Yevgeniy Brikman
+
+Comprehensive guide to Terraform
+Real-world patterns and anti-patterns
+Edition 3 covers Terraform 1.0+
+
+
+"Infrastructure as Code" by Kief Morris
+
+Broader IaC concepts
+Patterns for managing infrastructure
+Cloud-agnostic principles
+
+
+"Database Reliability Engineering" by Laine Campbell & Charity Majors
+
+Database operations best practices
+Relevant for understanding Flyway's role
+DevOps for databases
+
+
+
+Video Courses and Tutorials
+
+Udemy Courses
+
+"HashiCorp Certified: Terraform Associate"
+"Snowflake Complete Masterclass"
+"Database DevOps with Flyway"
+
+
+YouTube Channels
+
+HashiCorp official channel
+Snowflake Inc. channel
+Redgate Videos (Flyway tutorials)
+
+
+Conference Talks
+
+HashiConf videos (annual conference)
+Snowflake Summit recordings
+DevOps conferences featuring database talks
+
+
+
+Hands-On Practice Resources
+
+Terraform Scenarios
+
+Katacoda Terraform Scenarios (free)
+A Cloud Guru Terraform playground
+HashiCorp Learn sandboxes
+
+
+Snowflake Trial Account
+
+30-day free trial with $400 credits
+Full feature access
+Perfect for testing Terraform + Flyway
+
+
+Local Development
+
+LocalStack for AWS simulation
+Docker containers for testing
+Terraform local backend for experiments
+
+
+
+Community and Support
+
+Forums and Discussion
+
+HashiCorp Discuss: https://discuss.hashicorp.com/
+Snowflake Community: https://community.snowflake.com/
+Stack Overflow tags: [terraform], [flyway], [snowflake-cloud-data-platform]
+
+
+Slack Communities
+
+HashiCorp Community Slack
+Snowflake Community Slack
+dbt Slack (often discusses Terraform + Snowflake)
+
+
+GitHub Resources
+
+Awesome Terraform: https://github.com/shuaibiyy/awesome-terraform
+Snowflake Examples: https://github.com/Snowflake-Labs/
+Flyway Examples: https://github.com/flyway/flyway-docker
+
+
+
+Certification Paths
+
+HashiCorp Certified: Terraform Associate
+
+Validates Terraform skills
+Covers core concepts and best practices
+Study guide: https://learn.hashicorp.com/tutorials/terraform/associate-review
+
+
+SnowPro Core Certification
+
+Snowflake fundamentals
+Includes architecture and features
+Preparation: https://learn.snowflake.com/courses/snowpro-core-certification-exam-preparation
+
+
+Database DevOps Practitioner
+
+Covers CI/CD for databases
+Includes Flyway and similar tools
+Offered by various training providers
+
+
+
+Blogs and Articles
+
+HashiCorp Blog
+
+URL: https://www.hashicorp.com/blog
+Terraform best practices
+New feature announcements
+
+
+Snowflake Blog
+
+URL: https://www.snowflake.com/blog/
+Technical deep dives
+Customer case studies
+
+
+Medium Publications
+
+Snowflake Builders Blog
+HashiCorp Solutions Engineering
+Database DevOps articles
+
+
+
+Example Projects and Templates
+
+Terraform Module Registry
+
+Pre-built Snowflake modules
+Community contributions
+URL: https://registry.terraform.io/browse/modules?provider=snowflake
+
+
+GitHub Template Repositories
+
+snowflake-terraform-template
+flyway-migrations-template
+terraform-snowflake-pipeline
+
+
+Enterprise Examples
+
+Netflix's infrastructure as code
+Spotify's database migration patterns
+Airbnb's Terraform practices
+
+
+
+
+Decision Framework
+When to Use Terraform
+✅ USE TERRAFORM FOR:
+
+Creating/managing databases, schemas, warehouses
+User and role management
+Security policies and network rules
+Resource monitors and cost controls
+Storage and notification integrations
+External stages and file formats
+Grants and access control
+Infrastructure replication across environments
+Disaster recovery setup
+Compliance and governance rules
+
+When to Use Flyway
+✅ USE FLYWAY FOR:
+
+Table structure changes
+Data migrations and transformations
+Stored procedures and functions
+Complex SQL logic
+Data quality rules
+Historical data loads
+Seed data management
+Database refactoring
+Zero-downtime migrations
+Conditional migrations
+
+When to Use Both Together
+✅ USE BOTH FOR:
+
+Complete environment provisioning
+Production deployments
+Multi-tenant architectures
+Regulated environments
+Complex data platforms
+Enterprise data warehouses
+
+Decision Matrix
+ScenarioTerraformFlywayBothNotesNew environment setup✅❌⭐Terraform for infra, Flyway for initial schemaAdd new table❌✅❌Flyway handles schema changesResize warehouse✅❌❌Infrastructure change onlyData backfill❌✅❌Data operation onlyCreate new user✅❌❌Access managementComplex refactoring❌✅⭐May need infrastructure supportDisaster recovery✅❌⭐
