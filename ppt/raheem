@@ -1,0 +1,33 @@
+Flyway — imperative (migration-based)
+
+How it works: You write ordered migrations (V1, V2, …) and Flyway applies them in sequence, tracking what ran in a history table. 
+There’s no global “desired schema” model—you encode the steps. Make scripts idempotent yourself (e.g., CREATE TABLE IF NOT EXISTS) to be safe on re-runs.
+
+
+Ansible — hybrid (procedural order + declarative modules)
+
+How it works: You write a playbook (tasks run in order), but each task typically declares a desired state (e.g., “package should be present”).
+Modules are idempotent; the run order is still imperative.
+
+
+Liquibase — hybrid (declarative DSL + migration execution)
+
+How it works: You define changesets in a declarative DSL (XML/YAML/JSON) like createTable, addColumn, or you can embed SQL. Liquibase then executes them in order and records history. It also supports diffs/generateChangeLog, but the normal flow is still ordered changesets.
+
+Mini example (YAML changelog):
+
+
+Snowflake context (since that’s your stack)
+
+Terraform: manage platform & access (warehouses, databases, roles, grants). Fully declarative and idempotent for those objects.
+
+Schema changes (tables, views, procs):
+
+Flyway → pure migration steps (SQL).
+
+Liquibase → declarative changelog (YAML/XML/JSON) but still ordered changesets.
+
+Atlas (if you evaluate it) → can be declarative diff or migration-based; integrates with Terraform.
+
+
+Atlas now has Snowflake support and a Terraform provider, so you can keep everything in Terraform runs (and/or keep Atlas as a separate CLI step). Caveat: Snowflake support in Atlas is currently beta and part of Atlas Pro, so assess fit and risk before replacing a mature Flyway pipeline.
