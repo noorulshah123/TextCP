@@ -1,0 +1,8 @@
+import os, shutil
+print(os.environ.get("PATH"))
+print(shutil.which("terravision"))
+
+### If shutil.which("terravision") prints None, the kernel PATH still doesn’t include ~/.local/bin or your repo path. Add it at session start with:
+
+import os, sys
+os.environ["PATH"] = os.path.expanduser("~/.local/bin:~/terravision:") + os.environ["PATH"]
