@@ -1,0 +1,64 @@
+def _mk_addr(r: dict, inst: dict) -> str:
+    """
+    Build a Terraform address string like:
+      aws_vpc.main
+      aws_instance.web[0]
+      module.network.aws_subnet.private["a"]
+      data.aws_iam_policy_document.example
+    """
+    parts = []
+    # module prefix
+    if r.get("module"):
+        parts.append(f"module.{r['module']}")
+    # data vs managed
+    mode = r.get("mode") or "managed"
+    if mode == "data":
+        parts.append(f"data.{r['type']}.{r['name']}")
+    else:
+        parts.append(f"{r['type']}.{r['name']}")
+    addr = ".".join(parts)
+
+    # add index if present
+    idx = inst.get("index_key")
+    if idx is None:
+        return addr
+    if isinstance(idx, int):
+        return f"{addr}[{idx}]"
+    return f'{addr}["{idx}"]'
+
+
+
+
+def _plandata_from_state(state_json: dict) -> dict:
+    """
+    Convert state JSON into a pseudo 'resource_changes' list with a stable 'address' for each item.
+    """
+    changes = []
+    for r in state_json.get("resources", []):
+        base = {
+            "mode": r.get("mode", "managed"),
+            "type": r.get("type"),
+            "name": r.get("name"),
+            "module_address": (f"module.{r['module']}") if r.get("module") else None,
+        }
+        instances = r.get("instances") or [{}]
+        for inst in instances:
+            address = _mk_addr(r, inst)                # ← ALWAYS build address
+            after = inst.get("attributes", {}) or {}
+            changes.append({
+                "address": address,                    # ← never None now
+                **base,
+                "index": inst.get("index_key"),
+                "change": {
+                    "actions": ["no-op"],
+                    "after": after,
+                    "after_unknown": {},
+                    "after_sensitive": {},
+                },
+            })
+    return {"resource_changes": changes}
+
+
+terravision draw --statefile <your-state.json> --outfile arch --format png
+
+
